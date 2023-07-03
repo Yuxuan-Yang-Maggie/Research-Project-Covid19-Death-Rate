@@ -1,0 +1,418 @@
+---
+title: "Final Project"
+author: "Yuxuan Yang"
+date: "2021/12/11"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# install.packages("tidyverse")
+library(tidyverse)
+# install.packages("dplyr")
+library(dplyr)
+```
+
+
+```{r}
+# Load COVID data into R
+covid_data <- read.csv(file="/Users/yuxuanyang/Desktop/UofT Things/UofT Things_past/STA302/Final Project/COVID19 cases.csv", header=T)
+#covid_data
+```
+
+```{r}
+# Rename the variables Age.Group, Neighbourhood.Name, Client.Gender
+names(covid_data)[4] <- "Age_Group"
+names(covid_data)[5] <- "Neighborhood_Name"
+names(covid_data)[7] <- "Source_of_Infection"
+names(covid_data)[11] <- "Gender"
+names(covid_data)[16] <- "Ever_Hospitalized"
+names(covid_data)[17] <- "Ever_in_ICU"
+```
+
+
+```{r}
+# Drop all observations with missing values for our response variable and predictors
+covid_data_cleaned <- covid_data %>% drop_na("Age_Group", "Neighborhood_Name", "Gender", "Outcome", "Source_of_Infection", "Ever_Hospitalized", "Ever_in_ICU")
+covid_data_cleaned <- covid_data_cleaned[covid_data_cleaned$Classification == "CONFIRMED", ]
+```
+
+
+```{r}
+glimpse(covid_data_cleaned)
+```
+
+```{r}
+# Group data by neighborhood, and count number of total cases, females, age 60+, close contacts, and fatal cases in each neighborhood.
+age_vector <- c("60 to 69 Years", "70 to 79 Years", "80 to 89 Years", "90 and older")
+
+aggregate_data <- covid_data_cleaned %>%
+  group_by(Neighborhood_Name) %>%
+  summarise(total_counts = n(),
+            case_fatal = sum(Outcome == "FATAL"),
+            case_close_contact = sum(Source_of_Infection == "Close Contact"),
+            case_ever_hospital = sum(Ever_Hospitalized == "Yes"),
+            case_ever_ICU = sum(Ever_in_ICU == "Yes"),
+            case_elderly = sum(Age_Group %in% age_vector))
+```
+
+```{r}
+# Then create new variables to record: death_rate, proportion of close contact, proportion in hospital, proportion in ICU, proportion of elderly
+aggregate_data <- aggregate_data %>%
+  mutate(death_rate = case_fatal/total_counts,
+         prop_close_contact = case_close_contact/total_counts,
+         prop_hospital = case_ever_hospital/total_counts,
+         prop_ICU = case_ever_ICU/total_counts,
+         prop_elderly = case_elderly/total_counts)
+
+aggregate_data
+```
+
+```{r}
+aggregate_data_cleaned <- aggregate_data[-1,]
+
+keeps <- c("Neighborhood_Name", "death_rate", "prop_close_contact", "prop_hospital", "prop_ICU", "prop_elderly")
+aggregate_data_ready <- aggregate_data_cleaned[keeps]
+aggregate_data_ready
+```
+
+```{r}
+#First split the dataset into train and test sets. 
+str(aggregate_data_ready)
+
+# create a 50/50 split in the aggregate_data_ready
+set.seed(1)
+train <- aggregate_data_ready[sample(1:nrow(aggregate_data_ready), 70, replace=F), ]
+test <- aggregate_data_ready[which(!(aggregate_data_ready$Neighborhood_Name %in% train$Neighborhood_Name)),]
+```
+```{r}
+#View summary statistics for variables in both train and test sets to check if they're similar.
+mean_train <- apply(train[,-c(1)], 2, mean)
+sd_train <- apply(train[,-c(1)], 2, sd)
+
+mean_test <- apply(test[,-c(1)], 2, mean)
+sd_test <- apply(test[,-c(1)], 2, sd)
+```
+
+
+```{r}
+mean_train
+sd_train
+mean_test
+sd_test
+```
+
+We can take these and add them nicely to a table:
+
+Variable | mean (s.d.) in training | mean (s.d.) in test
+---------|-------------------------|--------------------
+`r names(test)[2]` | `r round(mean_train[1], 3)` (`r round(sd_train[1], 3)`) | `r round(mean_test[1], 3)` (`r round(sd_test[1], 3)`)
+`r names(test)[3]` | `r round(mean_train[2], 3)` (`r round(sd_train[2], 3)`) | `r round(mean_test[2], 3)` (`r round(sd_test[2], 3)`)
+`r names(test)[4]` | `r round(mean_train[3],3)` (`r round(sd_train[3],3)`) | `r round(mean_test[3],3)` (`r round(sd_test[3],3)`)
+`r names(test)[5]` | `r round(mean_train[4],3)` (`r round(sd_train[4],3)`) | `r round(mean_test[4],3)` (`r round(sd_test[4],3)`)
+`r names(test)[6]` | `r round(mean_train[5],3)` (`r round(sd_train[5],3)`) | `r round(mean_test[5],3)` (`r round(sd_test[5],3)`)
+
+
+Table: Summary statistics in training and test data sets, each of size 70.
+We see there's not much difference between train and test sets.
+
+```{r}
+# First we consider the full model with all 4 predictors.
+full <- lm(death_rate ~ ., data=train[,-c(1)])
+summary(full)
+
+# We check conditions for checking model assumptions, using train set. 
+pairs(train[,-c(1,2)])
+plot(train$death_rate  ~ fitted(full), main="death_rate vs Fitted", xlab="Fitted", ylab="COVID-19 death_rate")
+lines(lowess(train$death_rate ~ fitted(full)), lty=2)
+abline(a = 0, b = 1)
+```
+It seems condition 1 may require us to transform the response.
+Let's look at residual plots and QQ plot now.
+
+```{r}
+# check model assumptions for full model
+par(mfrow=c(2,3))
+
+# Residual VS. fitted value 
+plot(rstandard(full)~fitted(full), xlab="fitted", ylab="Residuals")
+
+# Residuals VS. predictors
+r <- resid(full)
+plot(r ~ train$prop_close_contact, main = "Res. V. prop_close_contact", xlab = "prop_close_contact", ylab = "Residual")
+plot(r ~ train$prop_hospital, main = "Res. V. prop_hospital", xlab = "prop_hospital", ylab = "Residual")
+plot(r ~ train$prop_ICU, main = "Res. V. prop_ICU", xlab = "prop_ICU", ylab = "Residual")
+plot(r ~ train$prop_elderly, main = "Res. V. prop_elderly", xlab = "prop_elderly", ylab = "Residual")
+
+# Normal QQ-plot
+qqnorm(rstandard(full))
+qqline(rstandard(full))
+``` 
+Residual plots don't look too bad, except the residual VS. fitted plot & the residual VS. prop_elderly
+plot have a bit fanning patterns. Also the normal QQ-plot looks good overall, except a bit non-normality
+and few outliers.
+So we consider transformations:
+
+```{r}
+#install.packages("car")
+library(car)
+
+train_positive <- train[which(train$death_rate > 0 & train$prop_close_contact > 0 & train$prop_hospital > 0 & train$prop_ICU > 0 & train$prop_elderly > 0), ]
+
+p <- powerTransform(cbind(train_positive[,-c(1)]))
+summary(p)
+```
+Let's transform the response by log only and see whether assumptions are satisfied. 
+
+```{r}
+# so transform just the response
+train_positive$log_death_rate <- log(train_positive$death_rate)
+
+full2 <- lm(log_death_rate ~ ., data=train_positive[,-c(1,2)])
+summary(full2)
+```
+```{r}
+glimpse(train_positive)
+```
+
+Then recheck the assumptions now to make sure that everything looks good.
+
+```{r}
+# copy-paste the code and modify accordingly based on changes made
+pairs(train_positive[,-c(1,2,7)])
+plot(train_positive$log_death_rate  ~ fitted(full2), main="log death rate vs Fitted", xlab="Fitted", ylab="log death rate of COVID-19")
+lines(lowess(train_positive$log_death_rate ~ fitted(full2)), lty=2)
+abline(a = 0, b = 1)
+
+par(mfrow=c(2,3))
+plot(rstandard(full2)~fitted(full2), xlab="fitted", ylab="Residuals")
+# Residuals VS. predictors
+r2 <- resid(full2)
+plot(r2 ~ train_positive$prop_close_contact, main = "Res. V. prop_close_contact", xlab = "prop_close_contact", ylab = "Residual")
+plot(r2 ~ train_positive$prop_hospital, main = "Res. V. prop_hospital", xlab = "prop_hospital", ylab = "Residual")
+plot(r2 ~ train_positive$prop_ICU, main = "Res. V. prop_ICU", xlab = "prop_ICU", ylab = "Residual")
+plot(r2 ~ train_positive$prop_elderly, main = "Res. V. prop_elderly", xlab = "prop_elder")
+
+qqnorm(rstandard(full2))
+qqline(rstandard(full2))
+```
+Now condition 1 and 2 both seem to satisfy, and all residual plots and the normal-QQ plot look good,
+indicating there are no severe model assumption violations here.
+Then we check if there's multicollinearity in the model, and check for influential points,
+outliers, and leverage points.
+```{r}
+vif(full2)
+which(cooks.distance(full2)>qf(0.5, 5, 68-5))
+which(abs(dffits(full2)) > 2*sqrt(5/68))
+which(abs(dfbetas(full2)) > 2/sqrt(68))
+
+#which(hatvalues(full2) > 2*(4+1)/n)
+#which(rstandard(full2) < -2 | rstandard(full2) > 2)
+```
+We see all VIF are much smaller than 5. We're not concerned about multicollinearity issues in this model. 
+We also are aware there exist influential points, leverage points, and outliers in our train set, though we can't necessarily remove them. 
+
+Then let's perform F-test to see whether we could remove some predictors.
+```{r}
+reduced <- lm(log_death_rate ~ prop_elderly, data=train_positive[,-c(1,2,3,4,5)])
+anova(reduced, full2)
+```
+We fail to reject the null hypothesis that there is no difference between these two models.
+It seems at this state we can just remove prop_close_contact, prop_hospital, and prop_ICU.
+But let's be cautious and also look at some individual t-tests. 
+
+```{r}
+summary(lm(log_death_rate ~ prop_close_contact, data=train_positive[,-c(1,2,4,5,6)]))
+summary(lm(log_death_rate ~ prop_hospital, data=train_positive[,-c(1,2,3,5,6)]))
+summary(lm(log_death_rate ~ prop_ICU, data=train_positive[,-c(1,2,3,4,6)]))
+summary(reduced)
+```
+
+These individual t-tests actually reveal we can only remove prop_close_contact.
+This is in contradiction with the partial F-test results, so my guess is there may exist
+interactions between some predictors.
+
+Let's look at a few more potential models and compare them with full2.
+```{r}
+# Model with prop_hospital, prop_ICU, and prop_elderly as predictors.
+mod1 <- lm(log_death_rate ~ prop_hospital + prop_ICU + prop_elderly, data=train_positive[,-c(1,2,3)])
+summary(mod1)
+
+# Check assumptions and conditions
+pairs(train_positive[,-c(1,2,3,7)])
+plot(train_positive$log_death_rate  ~ fitted(mod1), main="log death rate vs Fitted", xlab="Fitted", ylab="log death rate of COVID-19")
+lines(lowess(train_positive$log_death_rate ~ fitted(mod1)), lty=2)
+abline(a = 0, b = 1)
+
+par(mfrow=c(2,3))
+plot(rstandard(mod1)~fitted(mod1), xlab="fitted", ylab="Residuals")
+
+rmod1 <- resid(mod1)
+plot(rmod1 ~ train_positive$prop_hospital, main = "Res. V. prop_hospital", xlab = "prop_hospital", ylab = "Residual")
+plot(rmod1 ~ train_positive$prop_ICU, main = "Res. V. prop_ICU", xlab = "prop_ICU", ylab = "Residual")
+plot(rmod1 ~ train_positive$prop_elderly, main = "Res. V. prop_elderly", xlab = "prop_elder", ylab = "Residual")
+
+qqnorm(rstandard(mod1))
+qqline(rstandard(mod1))
+
+# Check influential points, outliers, and leverage points
+which(cooks.distance(mod1)>qf(0.5, 4, 68-4))
+which(abs(dffits(mod1)) > 2*sqrt(4/68))
+which(abs(dfbetas(mod1)) > 2/sqrt(68))
+
+#which(hatvalues(mod1) > 2*(3+1)/n)
+#which(rstandard(mod1) < -2 | rstandard(mod1) > 2)
+
+# Check VIF
+vif(mod1)
+```
+In this above model, all model assumptions and conditions 1 and 2 seem to satisfy.
+VIF looks all good and we are aware of influential points, outliers, and leverage points.
+But prop_ICU and prop_hospital seems to be not significantly linearly related with death_rate.
+
+
+```{r}
+# Model with prop_hospital, prop_ICU, and prop_elderly as predictors, with interactions
+# between prop_hospital&prop_elderly, prop_ICU&prop_elderly, prop_hospital&prop_ICU 
+mod2 <- lm(log_death_rate ~ prop_hospital + prop_ICU + prop_elderly + prop_hospital:prop_elderly + prop_ICU:prop_elderly + prop_hospital:prop_ICU, data = train_positive[,-c(1,2,3)])
+summary(mod2)
+
+# Check assumptions and conditions
+pairs(train_positive[,-c(1,2,3,7)])
+plot(train_positive$log_death_rate  ~ fitted(mod2), main="log death rate vs Fitted", xlab="Fitted", ylab="log death rate for COVID-19")
+lines(lowess(train_positive$log_death_rate ~ fitted(mod2)), lty=2)
+abline(a = 0, b = 1)
+
+par(mfrow=c(2,3))
+plot(rstandard(mod2)~fitted(mod2), xlab="fitted", ylab="Residuals")
+
+rmod2 <- resid(mod2)
+plot(rmod2 ~ train_positive$prop_hospital, main = "Res. V. prop_hospital", xlab = "prop_hospital", ylab = "Residual")
+plot(rmod2 ~ train_positive$prop_ICU, main = "Res. V. prop_ICU", xlab = "prop_ICU", ylab = "Residual")
+plot(rmod2 ~ train_positive$prop_elderly, main = "Res. V. prop_elderly", xlab = "prop_elder", ylab = "Residual")
+
+qqnorm(rstandard(mod2))
+qqline(rstandard(mod2))
+
+# Check influential points, outliers, and leverage points
+which(cooks.distance(mod2)>qf(0.5, 4, 68-4))
+which(abs(dffits(mod2)) > 2*sqrt(4/68))
+which(abs(dfbetas(mod2)) > 2/sqrt(68))
+
+#which(hatvalues(mod2) > 2*(3+1)/n)
+#which(rstandard(mod2) < -2 | rstandard(mod2) > 2)
+
+# Check VIF
+vif(mod2)
+```
+In this above model, all model assumptions and conditions 1 and 2 seem to satisfy,
+and there seems to be significant linear correlation between death_rate and prop_hospital,
+prop_elderly, and the interaction term between prop_hospital and prop_elderly. 
+However, VIF are much larger than 5, indicating presence of severe multicollinearity.
+Let's check if we could reach something different without this interaction term, but with
+both prop_elderly and prop_hospital.
+
+```{r}
+# Model with prop_hospital and prop_elderly as predictors
+mod3 <- lm(log_death_rate ~ prop_hospital + prop_elderly, data = train_positive[,-c(1,2,3,5)])
+summary(mod3)
+
+# Check assumptions and conditions
+pairs(train_positive[,-c(1,2,3,5,7)])
+plot(train_positive$log_death_rate  ~ fitted(mod3), main="log death rate vs Fitted", xlab="Fitted", ylab="log death rate for COVID-19")
+lines(lowess(train_positive$log_death_rate ~ fitted(mod3)), lty=2)
+abline(a = 0, b = 1)
+
+par(mfrow=c(2,2))
+plot(rstandard(mod3)~fitted(mod3), xlab="fitted", ylab="Residuals")
+
+rmod3 <- resid(mod3)
+plot(rmod3 ~ train_positive$prop_hospital, main = "Res. V. prop_hospital", xlab = "prop_hospital", ylab = "Residual")
+plot(rmod3 ~ train_positive$prop_elderly, main = "Res. V. prop_elderly", xlab = "prop_elder", ylab = "Residual")
+
+qqnorm(rstandard(mod3))
+qqline(rstandard(mod3))
+
+# Check influential points, outliers, and leverage points
+which(cooks.distance(mod3)>qf(0.5, 3, 68-3))
+which(abs(dffits(mod3)) > 2*sqrt(3/68))
+which(abs(dfbetas(mod3)) > 2/sqrt(68))
+
+#which(hatvalues(mod3) > 2*(2+1)/n)
+#which(rstandard(mod3) < -2 | rstandard(mod3) > 2)
+
+# Check VIF
+vif(mod3)
+```
+
+In the above mod3, all model assumptions and conditions 1 and 2 seem to satisfy,
+and there seems to be significant linear correlation between death_rate and only prop_elderly, but not
+between death_rate and prop_hospital. 
+VIF all looks good, and we're aware of the presence of influential points, outliers, and leverage points.
+
+Then let's validate our final model.
+
+```{r}
+# First transform the test set response also by log
+test_positive <- test[which(test$death_rate > 0 & test$prop_close_contact > 0 & test$prop_hospital > 0 & test$prop_ICU > 0 & test$prop_elderly > 0), ]
+
+test_positive$log_death_rate <- log(test_positive$death_rate)
+
+# apply our final model on test set
+mod3_test <- lm(log_death_rate ~ prop_hospital + prop_elderly, data = test_positive[,-c(1,2,3,5)])
+summary(mod3_test)
+```
+```{r}
+glimpse(test_positive)
+```
+
+
+```{r}
+# Check assumptions and conditions for mod3_test
+pairs(test_positive[,-c(1,2,3,5,7)])
+plot(test_positive$log_death_rate  ~ fitted(mod3_test), main="log death rate vs Fitted", xlab="Fitted", ylab="log death rate of COVID-19")
+lines(lowess(test_positive$log_death_rate ~ fitted(mod3_test)), lty=2)
+abline(a = 0, b = 1)
+
+par(mfrow=c(2,2))
+plot(rstandard(mod3_test)~fitted(mod3_test), xlab="fitted", ylab="Residuals")
+
+rmod3_test <- resid(mod3_test)
+plot(rmod3_test ~ test_positive$prop_hospital, main = "Res. V. prop_hospital", xlab = "prop_hospital", ylab = "Residual")
+plot(rmod3_test ~ test_positive$prop_elderly, main = "Res. V. prop_elderly", xlab = "prop_elder", ylab = "Residual")
+
+qqnorm(rstandard(mod3_test))
+qqline(rstandard(mod3_test))
+
+# Check influential points, outliers, and leverage points
+which(cooks.distance(mod3_test)>qf(0.5, 3, 69-3))
+which(abs(dffits(mod3_test)) > 2*sqrt(3/69))
+which(abs(dfbetas(mod3_test)) > 2/sqrt(69))
+
+#which(hatvalues(mod3_test) > 2*(2+1)/n)
+#which(rstandard(mod3_test) < -2 | rstandard(mod3_test) > 2)
+
+# Check VIF
+vif(mod3_test)
+```
+Here we see that when applying our final model on both the train and test sets, there are some 
+differences in the coefficients of prop_hospital and prop_elderly. We also have influential observations,
+outliers, and leverage points in both datasets for this model. Therefore, we could conclude that we have some evidence our final model is validated but the presence of influential observations may be causing some estimated coefficients to differ.
+
+We also observe that both prop_elderly and prop_hospital seem to be significantly linearly correlated 
+with death_rate in the test set; this is different from the insignificant prop_hospital in the train set.
+Thus we could conclude, our final model actually performs better on the test set than the train set.
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
